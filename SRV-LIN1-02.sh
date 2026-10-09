@@ -52,7 +52,7 @@ DOMAIN="lin1-labo.local"
 NAS_IP="10.10.10.33"
 NAS_NFS_EXPORT="/export/nextcloud-data"
 NFS_MOUNT_POINT="/mnt/nfs-nas"
-NC_DATA_DIR="${NFS_MOUNT_POINT}/data"   # Repertoire de donnees Nextcloud (sur le NAS)
+NC_DATA_DIR="${NC_DATA_DIR:-${NFS_MOUNT_POINT}/data}"   # Repertoire de donnees Nextcloud (sur le NAS)
 
 DB_NAME="nextcloud"
 DB_USER="nextclouduser"
@@ -277,6 +277,9 @@ systemctl restart apache2
 
 # --- Installation de Nextcloud en ligne de commande (mode non-interactif) ---
 # Le repertoire de donnees est place sur le partage du NAS (--data-dir).
+if grep -q "'installed' => true" /var/www/nextcloud/config/config.php 2>/dev/null; then
+    echo "Nextcloud deja installe, etape ignoree."
+else
 sudo -u www-data php /var/www/nextcloud/occ maintenance:install \
     --database "mysql" \
     --database-name "${DB_NAME}" \
@@ -284,7 +287,8 @@ sudo -u www-data php /var/www/nextcloud/occ maintenance:install \
     --database-pass "${DB_PASSWORD}" \
     --admin-user "${NC_ADMIN_USER}" \
     --admin-pass "${NC_ADMIN_PASSWORD}" \
-    --data-dir "${NC_DATA_DIR}" || echo "Nextcloud deja installe, etape ignoree."
+    --data-dir "${NC_DATA_DIR}"
+fi
 
 # occ maintenance:install ne configure que "localhost" comme domaine de
 # confiance par defaut : sans cette etape, l'acces via l'IP reelle du
