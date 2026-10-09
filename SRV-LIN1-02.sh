@@ -7,9 +7,10 @@
 # Module LIN1 - Infrastructure LIN1-LABO
 #
 # Ce script configure, sur une Debian 12 fraichement installee :
-#   1. Le reseau (interface interne statique)
-#   2. Nextcloud (avec Apache, MariaDB, PHP) accessible en HTTPS
-#   3. La configuration du partage (montage du stockage NAS en NFS)
+#   1. Le reseau (interface interne statique, DNS)
+#   2. Le partage : montage du stockage NAS en NFS (persistant)
+#   3. Nextcloud (avec Apache, MariaDB, PHP) accessible en HTTPS, avec son
+#      repertoire de donnees place sur le partage du NAS
 #
 # PREREQUIS :
 #   - Debian 12 (Bookworm) fraichement installee, avec une interface
@@ -17,24 +18,23 @@
 #     10.10.10.22). L'acces Internet transite par le routage assure par
 #     SRV-LIN1-01 (passerelle), deja pris en compte via la variable
 #     GATEWAY ci-dessous.
-#   - SRV-LIN1-01 (DNS/DHCP/LDAP) et NAS-LIN1-01 (stockage NFS) deja
-#     operationnels et accessibles sur le reseau 10.10.10.0/24.
+#   - NAS-LIN1-01 demarre en premier, avec un export NFS
+#     /export/nextcloud-data ayant l'option no_root_squash (sans elle,
+#     www-data ne peut pas ecrire dans le partage).
+#   - SRV-LIN1-01 (DNS/DHCP/LDAP) operationnel sur 10.10.10.0/24.
 #   - Ce script s'execute entierement en tant que root. Se connecter en
 #     root (su -) puis lancer :
 #       bash SRV-LIN1-02.sh
 #   Sudo est installe au passage pour l'administration courante du
-#   serveur une fois le script termine, mais n'est pas necessaire a
-#   l'execution du script lui-meme.
+#   serveur une fois le script termine.
 #
 # UTILISATION :
 #   su -
 #   bash SRV-LIN1-02.sh
 #
 # NOTE : la liaison LDAP et la creation des dossiers de groupe (Group
-# folders) dans Nextcloud necessitent que l'application web soit accessible
-# et sont finalisees via l'utilitaire occ (voir documentation, section 7.5
-# et 7.6) une fois ce script termine, le temps que Nextcloud soit
-# entierement initialise.
+# folders) dans Nextcloud sont finalisees avec l'utilitaire occ une fois ce
+# script termine (voir documentation, sections 7.6 et 7.7).
 #
 # ============================================================================
 
@@ -52,19 +52,20 @@ DOMAIN="lin1-labo.local"
 NAS_IP="10.10.10.33"
 NAS_NFS_EXPORT="/export/nextcloud-data"
 NFS_MOUNT_POINT="/mnt/nfs-nas"
+NC_DATA_DIR="${NFS_MOUNT_POINT}/data"   # Repertoire de donnees Nextcloud (sur le NAS)
 
 DB_NAME="nextcloud"
 DB_USER="nextclouduser"
 DB_PASSWORD="Pa\$\$w0rd"
-MARIADB_ROOT_PASSWORD="Pa\$\$w0rd"
 
 NC_ADMIN_USER="ncadmin"
 NC_ADMIN_PASSWORD="Pa\$\$w0rd"
 
-LDAP_HOST="10.10.10.11"
-LDAP_BASE_DN="dc=lin1-labo,dc=local"
-LDAP_ADMIN_DN="cn=admin,dc=lin1-labo,dc=local"
-LDAP_ADMIN_PASSWORD="Pa\$\$w0rd"
+# Version epinglee plutot que "latest.zip" : Debian 12 fournit PHP 8.2, or
+# les versions recentes de Nextcloud peuvent exiger PHP 8.3, non disponible
+# dans les depots standards de Debian 12. La version choisie doit etre
+# compatible avec PHP 8.2.
+NEXTCLOUD_VERSION="34.0.3"
 
 # ----------------------------------------------------------------------------
 # 0bis. VERIFICATION DES DROITS
@@ -74,9 +75,8 @@ if [ "$EUID" -ne 0 ]; then
     exit 1
 fi
 
-# Installation de sudo pour l'administration courante du serveur apres
-# l'execution de ce script (pas requis pour le script lui-meme, qui
-# s'execute directement en root).
+# Installation de sudo (utilise ensuite pour lancer occ sous l'utilisateur
+# www-data, et pour l'administration courante du serveur).
 if ! command -v sudo >/dev/null 2>&1; then
     apt update
     apt install -y sudo
@@ -133,18 +133,61 @@ EOF
 
 systemctl restart networking || true
 
-echo "Reseau configure : ${IFACE_LAN} = ${IP_SRV02}, passerelle ${GATEWAY}."
+# dns-nameservers n'est pris en compte que si resolvconf est installe :
+# le resolveur est ecrit directement pour utiliser SRV-LIN1-01 comme DNS.
+cat > /etc/resolv.conf <<EOF
+domain ${DOMAIN}
+search ${DOMAIN}
+nameserver ${DNS_SERVER}
+EOF
+
+echo "Reseau configure : ${IFACE_LAN} = ${IP_SRV02}, passerelle ${GATEWAY}, DNS ${DNS_SERVER}."
 
 # ============================================================================
-# 2. INSTALLATION DE NEXTCLOUD
+# 2. CONFIGURATION DU PARTAGE (montage NAS en NFS)
 # ============================================================================
 echo ""
-echo "---- [2/3] Installation de Nextcloud (Apache, MariaDB, PHP) ----"
+echo "---- [2/3] Configuration du partage (montage NFS depuis le NAS) ----"
 
 apt update
-apt install -y apache2 mariadb-server php php-gd php-mysql php-curl \
+apt install -y nfs-common apache2
+
+mkdir -p ${NFS_MOUNT_POINT}
+
+if ! mountpoint -q ${NFS_MOUNT_POINT}; then
+    mount -t nfs ${NAS_IP}:${NAS_NFS_EXPORT} ${NFS_MOUNT_POINT}
+fi
+
+# Rendre le montage persistant au redemarrage (nofail : ne bloque pas le
+# demarrage si le NAS est indisponible)
+if ! grep -q "${NFS_MOUNT_POINT}" /etc/fstab; then
+    echo "${NAS_IP}:${NAS_NFS_EXPORT} ${NFS_MOUNT_POINT} nfs defaults,_netdev,nofail 0 0" >> /etc/fstab
+fi
+
+# Repertoire de donnees de Nextcloud, sur le partage du NAS. Il doit etre
+# inscriptible par www-data (necessite no_root_squash cote NAS).
+mkdir -p ${NC_DATA_DIR}
+chown www-data:www-data ${NC_DATA_DIR}
+chmod 0770 ${NC_DATA_DIR}
+if ! sudo -u www-data touch ${NC_DATA_DIR}/.test_ecriture 2>/dev/null; then
+    echo "ERREUR : www-data ne peut pas ecrire dans ${NC_DATA_DIR}."
+    echo "Ajouter l'option no_root_squash a l'export NFS du NAS, puis relancer le script."
+    exit 1
+fi
+rm -f ${NC_DATA_DIR}/.test_ecriture
+
+echo "Partage NFS monte : ${NAS_IP}:${NAS_NFS_EXPORT} -> ${NFS_MOUNT_POINT}"
+echo "Repertoire de donnees Nextcloud : ${NC_DATA_DIR} (sur le NAS)"
+
+# ============================================================================
+# 3. INSTALLATION DE NEXTCLOUD
+# ============================================================================
+echo ""
+echo "---- [3/3] Installation de Nextcloud (Apache, MariaDB, PHP) ----"
+
+apt install -y mariadb-server php php-gd php-mysql php-curl \
     php-mbstring php-intl php-gmp php-bcmath php-xml php-imagick \
-    php-zip php-ldap libapache2-mod-php unzip nfs-common open-iscsi
+    php-zip php-ldap libapache2-mod-php unzip
 
 # --- Base de donnees ---
 mysql -u root <<EOF
@@ -155,10 +198,6 @@ FLUSH PRIVILEGES;
 EOF
 
 # --- Telechargement et extraction de Nextcloud ---
-# Version epinglee (33.0.7) plutot que "latest.zip" : Debian 12 fournit
-# PHP 8.2, or les versions de Nextcloud posterieures a la 33 exigent
-# PHP 8.3, non disponible dans les depots standards de Debian 12.
-NEXTCLOUD_VERSION="34.0.3"
 if [ ! -d /var/www/nextcloud ]; then
     cd /tmp
     echo "Telechargement de Nextcloud ${NEXTCLOUD_VERSION} (environ 300 Mo, peut prendre plusieurs minutes)..."
@@ -182,6 +221,8 @@ cat > /etc/apache2/sites-available/nextcloud.conf <<EOF
 <VirtualHost *:80>
     DocumentRoot /var/www/nextcloud
     ServerName srv-lin1-02.${DOMAIN}
+    # Alias : Nextcloud repond aussi sur /nextcloud (adresse demandee par la grille du POC)
+    Alias /nextcloud /var/www/nextcloud
 
     <Directory /var/www/nextcloud/>
         Require all granted
@@ -203,6 +244,8 @@ cat > /etc/apache2/sites-available/nextcloud-ssl.conf <<EOF
 <VirtualHost *:443>
     DocumentRoot /var/www/nextcloud
     ServerName srv-lin1-02.${DOMAIN}
+    # Alias : Nextcloud repond aussi sur /nextcloud (adresse demandee par la grille du POC)
+    Alias /nextcloud /var/www/nextcloud
 
     SSLEngine on
     SSLCertificateFile /etc/apache2/ssl/nextcloud.crt
@@ -226,23 +269,22 @@ EOF
 a2enmod rewrite headers env dir mime ssl php8.2 >/dev/null 2>&1 || a2enmod rewrite headers env dir mime ssl
 a2ensite nextcloud.conf nextcloud-ssl.conf
 
-# Augmentation de la limite memoire PHP (evite les erreurs 500 sur certaines
-# pages, comme la decouverte d'applications, rencontrees en usage normal)
-PHP_INI=$(php -i | grep "Loaded Configuration File" | awk '{print $NF}')
-if [ -f "${PHP_INI}" ]; then
-    sed -i 's/^memory_limit = .*/memory_limit = 512M/' "${PHP_INI}"
-fi
+# Augmentation de la limite memoire PHP d'Apache (evite les erreurs 500 sur
+# certaines pages, comme la decouverte d'applications)
+sed -i 's/^memory_limit = .*/memory_limit = 512M/' /etc/php/*/apache2/php.ini
 
 systemctl restart apache2
 
 # --- Installation de Nextcloud en ligne de commande (mode non-interactif) ---
+# Le repertoire de donnees est place sur le partage du NAS (--data-dir).
 sudo -u www-data php /var/www/nextcloud/occ maintenance:install \
     --database "mysql" \
     --database-name "${DB_NAME}" \
     --database-user "${DB_USER}" \
     --database-pass "${DB_PASSWORD}" \
     --admin-user "${NC_ADMIN_USER}" \
-    --admin-pass "${NC_ADMIN_PASSWORD}" || echo "Nextcloud deja installe, etape ignoree."
+    --admin-pass "${NC_ADMIN_PASSWORD}" \
+    --data-dir "${NC_DATA_DIR}" || echo "Nextcloud deja installe, etape ignoree."
 
 # occ maintenance:install ne configure que "localhost" comme domaine de
 # confiance par defaut : sans cette etape, l'acces via l'IP reelle du
@@ -256,45 +298,6 @@ sudo -u www-data php /var/www/nextcloud/occ app:install calendar || echo "App ca
 echo "Nextcloud installe. Acces : https://${IP_SRV02}"
 
 # ============================================================================
-# 3. CONFIGURATION DU PARTAGE (montage NAS en NFS)
-# ============================================================================
-echo ""
-echo "---- [3/3] Configuration du partage (montage NFS depuis le NAS) ----"
-
-mkdir -p ${NFS_MOUNT_POINT}
-
-if ! mountpoint -q ${NFS_MOUNT_POINT}; then
-    mount -t nfs ${NAS_IP}:${NAS_NFS_EXPORT} ${NFS_MOUNT_POINT}
-fi
-
-# Rendre le montage persistant au redemarrage
-if ! grep -q "${NFS_MOUNT_POINT}" /etc/fstab; then
-    echo "${NAS_IP}:${NAS_NFS_EXPORT} ${NFS_MOUNT_POINT} nfs defaults 0 0" >> /etc/fstab
-fi
-
-echo "Partage NFS monte : ${NAS_IP}:${NAS_NFS_EXPORT} -> ${NFS_MOUNT_POINT}"
-
-# Stockage externe Nextcloud pointant vers le partage NAS (point 16 du POC :
-# les fichiers Nextcloud doivent etre physiquement stockes sur le partage).
-# PREREQUIS cote NAS : l'export NFS doit avoir l'option no_root_squash,
-# sinon www-data ne peut pas ecrire dans le repertoire monte (voir doc 7.6bis).
-if [ -f /var/www/nextcloud/occ ]; then
-    sudo -u www-data php /var/www/nextcloud/occ app:enable files_external || true
-    sudo -u www-data php /var/www/nextcloud/occ files_external:create "NAS-Storage" local null::null -c datadir=${NFS_MOUNT_POINT} || echo "Stockage externe NAS-Storage deja cree, etape ignoree."
-fi
-
-# ============================================================================
-# NOTE : quotas personnels (repertoire "perso", 10 Mo par utilisateur,
-# document d'arborescence des donnees) : les utilisateurs LDAP ne possedent
-# pas d'UUID stable avant leur premiere synchronisation (declenchee par une
-# premiere connexion ou par occ user:list une fois LDAP configure). Cette
-# etape s'effectue donc manuellement apres la configuration LDAP, avec :
-#   sudo -u www-data php /var/www/nextcloud/occ user:list
-#   sudo -u www-data php /var/www/nextcloud/occ user:setting <uuid> files quota "10 MB"
-# (voir documentation, section 7.6)
-# ============================================================================
-
-# ============================================================================
 # FIN
 # ============================================================================
 echo ""
@@ -303,12 +306,10 @@ echo " SRV-LIN1-02 - Installation terminee avec succes"
 echo "============================================================"
 echo " Nextcloud : https://${IP_SRV02}"
 echo " Compte admin Nextcloud : ${NC_ADMIN_USER}"
-echo " Partage NFS monte sur : ${NFS_MOUNT_POINT}"
+echo " Donnees Nextcloud : ${NC_DATA_DIR} (partage NFS du NAS)"
 echo ""
-echo " ETAPES MANUELLES RESTANTES (voir documentation section 7.5 et 7.6) :"
-echo "   - Activation et configuration de l'application LDAP dans Nextcloud"
-echo "   - Installation de l'application Group folders et creation des"
-echo "     dossiers Clients / Logiciels / Commun avec quotas et droits"
-echo "   - Quota personnel (10 MB) pour chaque utilisateur LDAP, via"
-echo "     occ user:setting <uuid> files quota \"10 MB\""
+echo " ETAPES MANUELLES RESTANTES (voir documentation, sections 7.6 et 7.7) :"
+echo "   - Liaison LDAP de Nextcloud"
+echo "   - Dossiers de groupe Clients / Logiciels / Commun (quotas et droits)"
+echo "   - Quota personnel (10 Mo) des utilisateurs"
 echo "============================================================"
