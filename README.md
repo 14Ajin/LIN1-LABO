@@ -5,6 +5,17 @@ DNS, DHCP, LDAP, passerelle Internet, serveur de fichiers Nextcloud et stockage 
 
 > Projet réalisé dans le cadre du module **LIN1** (CPNV) — auteur : **Ajin Sivasampoo**.
 
+![Debian 12](https://img.shields.io/badge/Debian-12%20Bookworm-A81D33?logo=debian&logoColor=white)
+![Bash](https://img.shields.io/badge/Bash-scripts-4EAA25?logo=gnubash&logoColor=white)
+![Nextcloud](https://img.shields.io/badge/Nextcloud-34.0.3-0082C9?logo=nextcloud&logoColor=white)
+![OpenMediaVault](https://img.shields.io/badge/OpenMediaVault-8-5DACDF)
+
+**Liens rapides :**
+[Documentation technique](docs/Documentation_LIN1_LABO_Sivasampoo_Ajin.pdf) ·
+[POC](docs/POC_LIN1_LABO_Sivasampoo_Ajin.pdf) ·
+[Archives OVA](https://www.swisstransfer.com/dl/01a1781d-20ba-73ad-bb15-be0a9fabcd05) ·
+Vidéo des scripts : *lien à ajouter*
+
 ---
 
 ## Sommaire
@@ -15,10 +26,13 @@ DNS, DHCP, LDAP, passerelle Internet, serveur de fichiers Nextcloud et stockage 
 4. [Utilisation](#utilisation)
 5. [Ce que fait chaque script](#ce-que-fait-chaque-script)
 6. [Récapitulatif affiché en fin d'exécution](#récapitulatif-affiché-en-fin-dexécution)
-7. [Droits d'accès (Nextcloud)](#droits-daccès-nextcloud)
-8. [Étapes réalisées après les scripts](#étapes-réalisées-après-les-scripts)
-9. [Dépannage](#dépannage)
-10. [Notes de sécurité](#notes-de-sécurité)
+7. [Vérification rapide](#vérification-rapide)
+8. [Comptes et droits d'accès](#comptes-et-droits-daccès)
+9. [Personnalisation](#personnalisation)
+10. [Étapes réalisées après les scripts](#étapes-réalisées-après-les-scripts)
+11. [Livrables du projet](#livrables-du-projet)
+12. [Dépannage](#dépannage)
+13. [Notes de sécurité](#notes-de-sécurité)
 
 ---
 
@@ -62,6 +76,8 @@ Domaine interne : `lin1-labo.local` — annuaire LDAP : `dc=lin1-labo,dc=local`.
 |---|---|
 | `SRV-LIN1-01.sh` | Installation de SRV-LIN1-01 : réseau, routage/NAT, DNS, DHCP, LDAP peuplé |
 | `SRV-LIN1-02.sh` | Installation de SRV-LIN1-02 : réseau, montage NFS du NAS, Nextcloud en HTTPS |
+| `docs/Documentation_LIN1_LABO_Sivasampoo_Ajin.pdf` | Documentation technique complète (15 sections) |
+| `docs/POC_LIN1_LABO_Sivasampoo_Ajin.pdf` | Proof of Concept : les 33 points de la grille avec captures légendées |
 | `README.md` | Ce fichier |
 
 ---
@@ -99,6 +115,8 @@ bash SRV-LIN1-02.sh          # sur SRV-LIN1-02
 
 Les scripts ne demandent **aucun paramètre** et s'arrêtent à la première erreur (`set -e`).
 Le téléchargement de Nextcloud (≈ 315 Mo) peut prendre plusieurs minutes.
+
+Avec un compte disposant de `sudo`, la commande équivalente est `sudo bash SRV-LIN1-0X.sh`.
 
 ---
 
@@ -145,7 +163,41 @@ Le dernier message est : `SRV-LIN1-0X - Installation terminee avec succes`.
 
 ---
 
-## Droits d'accès (Nextcloud)
+## Vérification rapide
+
+Après l'exécution, quelques commandes suffisent à contrôler l'installation :
+
+```bash
+# Sur SRV-LIN1-01
+ip -br a                                         # 10.10.10.11 sur ens34
+nslookup srv-lin1-02.lin1-labo.local 10.10.10.11 # résolution DNS
+systemctl is-active named isc-dhcp-server slapd  # trois services actifs
+ldapsearch -x -b "dc=lin1-labo,dc=local" "(objectClass=inetOrgPerson)" uid
+
+# Sur SRV-LIN1-02
+ip -br a                                         # 10.10.10.22
+df -h | grep nfs-nas                             # partage du NAS monté
+curl -k -s -o /dev/null -w "%{http_code}\n" https://10.10.10.22/nextcloud/status.php   # 200
+```
+
+Depuis un poste du réseau `10.10.10.0/24`, Nextcloud répond sur **`https://10.10.10.22/nextcloud`**.
+
+---
+
+## Comptes et droits d'accès
+
+### Comptes créés
+
+| Compte | Groupe LDAP | Mot de passe (labo) | Créé par |
+|---|---|---|---|
+| `man01`, `man02` | `manager` (gid 5001) | `Pa$$w0rd` | `SRV-LIN1-01.sh` |
+| `ing01`, `ing02` | `ingenieur` (gid 5002) | `Pa$$w0rd` | `SRV-LIN1-01.sh` |
+| `dev01` | `developpeur` (gid 5003) | `Pa$$w0rd` | `SRV-LIN1-01.sh` |
+| `dev02` | `developpeur` (gid 5003) | `secret` | ajout manuel (POC, point 30) |
+| `cn=admin,dc=lin1-labo,dc=local` | administrateur LDAP | `Pa$$w0rd` | `SRV-LIN1-01.sh` |
+| `ncadmin` | administrateur Nextcloud | `Pa$$w0rd` | `SRV-LIN1-02.sh` |
+
+### Droits sur les dossiers Nextcloud
 
 | Dossier | Quota | `manager` | `ingenieur` | `developpeur` |
 |---|---|---|---|---|
@@ -153,6 +205,20 @@ Le dernier message est : `SRV-LIN1-0X - Installation terminee avec succes`.
 | Logiciels | 20 Mo | aucun accès | lecture / écriture | lecture / écriture |
 | Commun | 30 Mo | lecture seule | lecture / écriture | lecture / écriture |
 | Répertoire personnel | 10 Mo | chaque utilisateur | chaque utilisateur | chaque utilisateur |
+
+---
+
+## Personnalisation
+
+Les paramètres sont regroupés en tête de chaque script (section `VARIABLES DE CONFIGURATION`) :
+
+| Script | Variables principales |
+|---|---|
+| `SRV-LIN1-01.sh` | `IFACE_NAT`, `IFACE_LAN`, `DOMAIN`, `BASE_DN`, `DHCP_RANGE_START`, `DHCP_RANGE_END`, `LDAP_ADMIN_PASSWORD`, `USER_DEFAULT_PASSWORD` |
+| `SRV-LIN1-02.sh` | `IFACE_LAN`, `GATEWAY`, `DNS_SERVER`, `NAS_IP`, `NAS_NFS_EXPORT`, `NC_DATA_DIR`, `DB_PASSWORD`, `NC_ADMIN_PASSWORD`, `NEXTCLOUD_VERSION` |
+
+`NC_DATA_DIR` peut aussi être passé au lancement, sans modifier le script :
+`NC_DATA_DIR=/mnt/nfs-nas/data-test bash SRV-LIN1-02.sh`.
 
 ---
 
@@ -167,6 +233,18 @@ partage. Les étapes suivantes sont faites ensuite avec `occ` et sont décrites 
 
 ---
 
+## Livrables du projet
+
+| Livrable | Emplacement |
+|---|---|
+| Scripts d'installation | ce dépôt (`SRV-LIN1-01.sh`, `SRV-LIN1-02.sh`) |
+| Vidéo de fonctionnement des scripts | *lien à ajouter* |
+| Archives OVA des trois serveurs | [SwissTransfer](https://www.swisstransfer.com/dl/01a1781d-20ba-73ad-bb15-be0a9fabcd05) (lien à durée limitée) |
+| Documentation technique | [`docs/Documentation_LIN1_LABO_Sivasampoo_Ajin.pdf`](docs/Documentation_LIN1_LABO_Sivasampoo_Ajin.pdf) |
+| Proof of Concept | [`docs/POC_LIN1_LABO_Sivasampoo_Ajin.pdf`](docs/POC_LIN1_LABO_Sivasampoo_Ajin.pdf) |
+
+---
+
 ## Dépannage
 
 | Symptôme | Cause et solution |
@@ -176,6 +254,7 @@ partage. Les étapes suivantes sont faites ensuite avec `occ` et sont décrites 
 | `Login is invalid because files already exist for this user` | Le répertoire de données du NAS contient déjà une installation précédente. Le renommer sur le NAS (`mv data data-ancien`) ou indiquer un autre dossier : `NC_DATA_DIR=/mnt/nfs-nas/data-test bash SRV-LIN1-02.sh`. |
 | `Access through untrusted domain` | L'adresse n'est pas dans `trusted_domains` : `occ config:system:set trusted_domains <n> --value=<adresse>`. |
 | Alerte SSH `REMOTE HOST IDENTIFICATION HAS CHANGED` | Nouvelle machine sur la même IP : `ssh-keygen -R <adresse_ip>`. |
+| Interface DOWN, aucune adresse après une modification de la VM | La carte a pu être renommée (`ens33` → `ens34`). Vérifier avec `ip a`, corriger `/etc/network/interfaces` (`auto ens34`) puis `ifup ens34`. |
 | Pas d'accès Internet depuis SRV-LIN1-02 | Vérifier que SRV-LIN1-01 est démarré, que `ip_forward` vaut `1` et que la règle `MASQUERADE` est présente. |
 
 ---
