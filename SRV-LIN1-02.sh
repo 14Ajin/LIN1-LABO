@@ -101,9 +101,12 @@ echo "Nom de machine configure : srv-lin1-02"
 # telecharger les paquets), celle-ci est reconnue par son adresse en
 # 192.168.x.x (plage NAT VMware) et ecartee : l'interface interne est
 # alors l'autre.
-if ip -4 addr show "${IFACE_LAN}" | grep -q "inet 192\.168\."; then
-    for IFACE in $(ip -o link show | awk -F': ' '{print $2}' | grep -v '^lo$'); do
-        if [ "${IFACE}" != "${IFACE_LAN}" ]; then
+if ! ip link show "${IFACE_LAN}" >/dev/null 2>&1 || ip -4 addr show "${IFACE_LAN}" | grep -q "inet 192\.168\."; then
+    # L'interface par defaut n'existe pas (ex. carte nommee ens34 selon le
+    # slot PCI de la VM) ou c'est la carte NAT : on prend la premiere autre
+    # interface qui n'est pas en 192.168.x.x.
+    for IFACE in $(ip -o link show | awk -F': ' '{print $2}' | cut -d@ -f1 | grep -v '^lo$'); do
+        if [ "${IFACE}" != "${IFACE_LAN}" ] && ! ip -4 addr show "${IFACE}" | grep -q "inet 192\.168\."; then
             IFACE_LAN="${IFACE}"
             break
         fi
