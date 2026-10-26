@@ -302,6 +302,60 @@ sudo -u www-data php /var/www/nextcloud/occ app:install calendar || echo "App ca
 echo "Nextcloud installe. Acces : https://${IP_SRV02}"
 
 # ============================================================================
+# RECAPITULATIF DE LA CONFIGURATION
+# ============================================================================
+# Affiche ce qui vient d'etre configure (aucune verification manuelle a
+# taper). Les erreurs de cette section n'interrompent pas le script.
+set +e
+OCC="sudo -u www-data php /var/www/nextcloud/occ"
+echo ""
+echo "============================================================"
+echo " RECAPITULATIF DE LA CONFIGURATION - SRV-LIN1-02"
+echo "============================================================"
+
+echo ""
+echo "[Machine]"
+echo "  Nom                      : $(hostname)"
+
+echo ""
+echo "[Reseau]"
+ip -br a | grep -v '^lo' | sed 's/^/  /'
+echo "  Passerelle               : $(ip route | awk '/^default/{print $3; exit}')"
+echo "  DNS                      : $(awk '/^nameserver/{print $2}' /etc/resolv.conf | tr '\n' ' ')"
+if ping -c 1 -W 3 ${GATEWAY} >/dev/null 2>&1; then
+    echo "  Ping SRV-LIN1-01         : OK"
+else
+    echo "  Ping SRV-LIN1-01         : ECHEC"
+fi
+if ping -c 1 -W 3 8.8.8.8 >/dev/null 2>&1; then
+    echo "  Acces Internet           : OK"
+else
+    echo "  Acces Internet           : ECHEC"
+fi
+
+echo ""
+echo "[Partage NAS - NFS]"
+echo "  Monte                    : $(df -h ${NFS_MOUNT_POINT} | awk 'NR==2{print $1 " sur " $6 " (" $3 " utilises sur " $2 ")"}')"
+echo "  Montage au demarrage     : $(grep ${NFS_MOUNT_POINT} /etc/fstab)"
+
+echo ""
+echo "[Services]"
+for SVC in apache2 mariadb; do
+    printf "  %-24s : %s\n" "${SVC}" "$(systemctl is-active ${SVC})"
+done
+echo "  PHP                      : $(php -r 'echo PHP_VERSION;')"
+echo "  Base de donnees          : $(mysql -N -e "SHOW DATABASES LIKE '${DB_NAME}'")"
+
+echo ""
+echo "[Nextcloud]"
+${OCC} status | grep -E "installed|versionstring" | sed 's/^ *- /  /'
+echo "  Repertoire de donnees    : $(grep datadirectory /var/www/nextcloud/config/config.php | sed "s/.*=> *'\(.*\)',/\1/")"
+echo "  Domaines de confiance    : $(${OCC} config:system:get trusted_domains | tr '\n' ' ')"
+echo "  Calendrier               : $(${OCC} app:list | grep -i calendar | sed 's/^ *- //')"
+echo "  Comptes presents         : $(${OCC} user:list | sed 's/^ *- //' | tr '\n' ' ')"
+echo "  Reponse HTTPS            : $(wget --no-check-certificate -S --spider https://${IP_SRV02}/nextcloud 2>&1 | grep 'HTTP/' | tail -1 | sed 's/^ *//')"
+
+# ============================================================================
 # FIN
 # ============================================================================
 echo ""
