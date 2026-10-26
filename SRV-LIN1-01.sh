@@ -133,7 +133,7 @@ echo "Reseau configure : ${IFACE_LAN} = ${IP_SRV01}, routage NAT actif."
 echo ""
 echo "---- [2/4] Installation et configuration du DNS (BIND9) ----"
 
-apt install -y bind9 bind9utils bind9-doc
+apt install -y bind9 bind9utils bind9-doc bind9-dnsutils
 
 cat > /etc/bind/named.conf.options <<EOF
 options {
@@ -431,6 +431,60 @@ nameserver ${IP_SRV01}
 EOF
 
 echo "Resolveur local configure : nameserver ${IP_SRV01}"
+
+# ============================================================================
+# RECAPITULATIF DE LA CONFIGURATION
+# ============================================================================
+# Affiche ce qui vient d'etre configure (aucune verification manuelle a
+# taper). Les erreurs de cette section n'interrompent pas le script.
+set +e
+echo ""
+echo "============================================================"
+echo " RECAPITULATIF DE LA CONFIGURATION - SRV-LIN1-01"
+echo "============================================================"
+
+echo ""
+echo "[Machine]"
+echo "  Nom                      : $(hostname)"
+
+echo ""
+echo "[Reseau]"
+ip -br a | grep -v '^lo' | sed 's/^/  /'
+echo "  Routage IP (ip_forward)  : $(cat /proc/sys/net/ipv4/ip_forward)  (1 = actif)"
+echo "  NAT (masquerade)         : $(iptables -t nat -S POSTROUTING | grep MASQUERADE)"
+if ping -c 1 -W 3 8.8.8.8 >/dev/null 2>&1; then
+    echo "  Acces Internet           : OK"
+else
+    echo "  Acces Internet           : ECHEC"
+fi
+
+echo ""
+echo "[Services]"
+for SVC in named isc-dhcp-server slapd; do
+    printf "  %-24s : %s\n" "${SVC}" "$(systemctl is-active ${SVC})"
+done
+
+echo ""
+echo "[DNS - zone ${DOMAIN}]"
+for HOST in srv-lin1-01 srv-lin1-02 nas-lin1-01; do
+    printf "  %-24s : %s\n" "${HOST}.${DOMAIN}" "$(dig @${IP_SRV01} +short ${HOST}.${DOMAIN} 2>/dev/null)"
+done
+printf "  %-24s : %s\n" "10.10.10.22 (inverse)" "$(dig @${IP_SRV01} +short -x 10.10.10.22 2>/dev/null)"
+
+echo ""
+echo "[DHCP]"
+echo "  Plage distribuee         : ${DHCP_RANGE_START} - ${DHCP_RANGE_END}"
+echo "  Passerelle / DNS donnes  : ${IP_SRV01} / ${IP_SRV01}"
+echo "  Domaine                  : ${DOMAIN}"
+
+echo ""
+echo "[LDAP - ${BASE_DN}]"
+echo "  Groupes :"
+ldapsearch -x -LLL -b "ou=groups,${BASE_DN}" "(objectClass=posixGroup)" cn gidNumber 2>/dev/null | \
+    awk 'BEGIN{RS="";FS="\n"} {c="";g=""; for(i=1;i<=NF;i++){ if($i ~ /^cn: /) c=substr($i,5); if($i ~ /^gidNumber: /) g=substr($i,12)} printf "    %-12s gid %s\n", c, g}'
+echo "  Utilisateurs :"
+ldapsearch -x -LLL -b "ou=people,${BASE_DN}" "(objectClass=posixAccount)" uid cn gidNumber 2>/dev/null | \
+    awk 'BEGIN{RS="";FS="\n"} {u="";n="";g=""; for(i=1;i<=NF;i++){ if($i ~ /^uid: /) u=substr($i,6); if($i ~ /^cn: /) n=substr($i,5); if($i ~ /^gidNumber: /) g=substr($i,12)} printf "    %-8s %-20s gid %s\n", u, n, g}'
 
 # ============================================================================
 # FIN
