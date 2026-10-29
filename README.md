@@ -14,7 +14,7 @@ DNS, DHCP, LDAP, passerelle Internet, serveur de fichiers Nextcloud et stockage 
 [Documentation technique](docs/Documentation_LIN1_LABO_Sivasampoo_Ajin.pdf) ·
 [POC](docs/POC_LIN1_LABO_Sivasampoo_Ajin.pdf) ·
 [Archives OVA](https://www.swisstransfer.com/dl/01a1781d-20ba-73ad-bb15-be0a9fabcd05) ·
-Vidéo des scripts : *lien à ajouter*
+[Vidéo de démonstration des scripts](https://youtu.be/uHj_qOkD4Jg)
 
 ---
 
@@ -238,7 +238,7 @@ partage. Les étapes suivantes sont faites ensuite avec `occ` et sont décrites 
 | Livrable | Emplacement |
 |---|---|
 | Scripts d'installation | ce dépôt (`SRV-LIN1-01.sh`, `SRV-LIN1-02.sh`) |
-| Vidéo de fonctionnement des scripts | *lien à ajouter* |
+| Vidéo de fonctionnement des scripts | [YouTube : démonstration des scripts](https://youtu.be/uHj_qOkD4Jg) |
 | Archives OVA des trois serveurs | [SwissTransfer](https://www.swisstransfer.com/dl/01a1781d-20ba-73ad-bb15-be0a9fabcd05) (lien à durée limitée) |
 | Documentation technique | [`docs/Documentation_LIN1_LABO_Sivasampoo_Ajin.pdf`](docs/Documentation_LIN1_LABO_Sivasampoo_Ajin.pdf) |
 | Proof of Concept | [`docs/POC_LIN1_LABO_Sivasampoo_Ajin.pdf`](docs/POC_LIN1_LABO_Sivasampoo_Ajin.pdf) |
