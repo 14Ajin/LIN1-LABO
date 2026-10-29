@@ -31,8 +31,9 @@ DNS, DHCP, LDAP, passerelle Internet, serveur de fichiers Nextcloud et stockage 
 9. [Personnalisation](#personnalisation)
 10. [Étapes réalisées après les scripts](#étapes-réalisées-après-les-scripts)
 11. [Livrables du projet](#livrables-du-projet)
-12. [Dépannage](#dépannage)
-13. [Notes de sécurité](#notes-de-sécurité)
+12. [Importer les archives OVA](#importer-les-archives-ova)
+13. [Dépannage](#dépannage)
+14. [Notes de sécurité](#notes-de-sécurité)
 
 ---
 
@@ -242,6 +243,53 @@ partage. Les étapes suivantes sont faites ensuite avec `occ` et sont décrites 
 | Archives OVA des trois serveurs | [SwissTransfer](https://www.swisstransfer.com/dl/01a1781d-20ba-73ad-bb15-be0a9fabcd05) (lien à durée limitée) |
 | Documentation technique | [`docs/Documentation_LIN1_LABO_Sivasampoo_Ajin.pdf`](docs/Documentation_LIN1_LABO_Sivasampoo_Ajin.pdf) |
 | Proof of Concept | [`docs/POC_LIN1_LABO_Sivasampoo_Ajin.pdf`](docs/POC_LIN1_LABO_Sivasampoo_Ajin.pdf) |
+
+---
+
+## Importer les archives OVA
+
+Les trois serveurs configurés et peuplés sont disponibles en OVA : [SwissTransfer](https://www.swisstransfer.com/dl/01a1781d-20ba-73ad-bb15-be0a9fabcd05) (lien à durée limitée). La procédure complète est décrite dans la documentation technique, section 15.
+
+### Prérequis
+
+- VMware Workstation, avec un réseau **Host-only VMnet2** en `10.10.10.0/24` et le **DHCP de VMware désactivé** sur ce réseau (Edit → Virtual Network Editor).
+- Aucun autre serveur démarré avec les mêmes adresses (`10.10.10.11`, `.22`, `.33`).
+
+### Import
+
+Dans VMware : **File → Open**, choisir le fichier `.ova`, nommer la machine, puis **Import**. Si VMware signale un écart avec la spécification OVF, cliquer sur **Retry**.
+
+Avant le premier démarrage, vérifier les cartes réseau (VM → Settings → Network Adapter) :
+
+| Machine | Cartes réseau |
+|---|---|
+| `NAS-LIN1-01` | Host-only (VMnet2) |
+| `SRV-LIN1-01` | NAT (VMnet8) et Host-only (VMnet2) |
+| `SRV-LIN1-02` | Host-only (VMnet2) |
+
+**Ordre de démarrage : `NAS-LIN1-01` → `SRV-LIN1-01` → `SRV-LIN1-02`.** SRV-LIN1-02 monte le partage du NAS au démarrage et utilise SRV-LIN1-01 comme passerelle, DNS et annuaire LDAP.
+
+### Vérification après démarrage
+
+```bash
+# NAS-LIN1-01 (root)
+cat /proc/mdstat ; exportfs -v ; targetcli ls
+
+# SRV-LIN1-01
+systemctl is-active named isc-dhcp-server slapd apache2
+ldapsearch -x -b "dc=lin1-labo,dc=local" -LLL uid gidNumber
+
+# SRV-LIN1-02
+df -h | grep -E "nfs-nas|iscsi"
+systemctl is-active apache2 mariadb
+sudo -u www-data php /var/www/nextcloud/occ status
+```
+
+Interfaces web : OpenMediaVault sur `http://10.10.10.33`, LAM sur `http://10.10.10.11/lam`, Nextcloud sur `https://10.10.10.22/nextcloud`.
+
+- Si le partage n'est pas monté sur SRV-LIN1-02 (NAS pas encore prêt) : `sudo mount -a`, ou redémarrer SRV-LIN1-02.
+- Si une machine importée n'a pas de réseau : vérifier sa carte (VMnet2) et le nom de l'interface dans `/etc/network/interfaces`.
+- Alerte SSH `REMOTE HOST IDENTIFICATION HAS CHANGED` : `ssh-keygen -R <adresse_ip>`.
 
 ---
 
